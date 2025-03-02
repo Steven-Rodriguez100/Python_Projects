@@ -1,0 +1,100 @@
+# Function to scrape eBay sold listings
+import time
+
+import pandas as pd
+import requests
+from bs4 import BeautifulSoup
+
+from fake_useragent import UserAgent  # Install with: pip install fake-useragent
+
+
+def scrape_ebay_active(search_term, retries=3, delay=5):
+    url = f"https://www.ebay.com/sch/i.html?_nkw={search_term}"
+
+    # Rotate User-Agent
+    ua = UserAgent()
+    headers = {"User-Agent": ua.random}
+
+    # Optional: Add proxy support (uncomment and configure if needed)
+    # proxies = {"http": "http://your_proxy:port", "https": "http://your_proxy:port"}
+
+    # Retry logic
+    for attempt in range(retries):
+        try:
+            response = requests.get(url, headers=headers, timeout=20)  # Add proxies=proxies if using
+            if response.status_code == 503:
+                print(f"Attempt {attempt + 1}/{retries} - Service Unavailable (503). Retrying...")
+            elif response.status_code != 200:
+                print(f"Failed to fetch page: {response.status_code}")
+                return None
+            else:
+                break  # Success, exit retry loop
+        except requests.RequestException as e:
+            print(f"Attempt {attempt + 1}/{retries} failed: {e}")
+
+        if attempt < retries - 1:
+            time.sleep(delay)
+        else:
+            print("All retries failed.")
+            return None
+
+    # Parse HTML
+    soup = BeautifulSoup(response.text, "html.parser")
+    items = soup.select(".s-item")
+
+    if not items:
+        print("No items found. Possible CAPTCHA, block, or page structure change.")
+        print("Response snippet:", response.text[:200])  # Debug output
+        return None
+
+    # Extract data
+    data = []
+    for item in items:
+        title = item.select_one(".s-item__title")
+        price = item.select_one(".s-item__price")
+        shipping = item.select_one(".s-item__shipping")
+        link = item.select_one(".s-item__link")
+
+        title_text = title.text.strip() if title else "N/A"
+        price_text = 0.0
+        if price:
+            price_str = price.text.replace("$", "").replace(",", "").strip()
+            try:
+                price_text = float(price_str)
+            except ValueError:
+                print(f"Could not parse price '{price.text}' for item '{title_text}'")
+
+        shipping_text = shipping.text.strip() if shipping else "N/A"
+        link_url = link["href"] if link else "N/A"
+
+        data.append({
+            "Title": title_text,
+            "Price": price_text,
+            "Shipping": shipping_text,
+            "URL": link_url
+        })
+
+    df = pd.DataFrame(data)
+    return df
+
+
+# Main execution with user prompt
+if __name__ == "__main__":
+    # Prompt user for search term
+    search_term = input("Enter the item to search for active listings on eBay (e.g., 'nintendo switch'): ").strip()
+
+    if not search_term:
+        print("No search term provided. Please try again.")
+    else:
+        print(f"Searching for active listings of '{search_term}' on eBay...")
+        active_df = scrape_ebay_active(search_term, retries=3, delay=10)  # Increased delay
+
+        if active_df is not None and not active_df.empty:
+            print("\nResults:")
+            print(active_df.head())
+            active_df.to_csv(f"ebay_active_{search_term.replace(' ', '_')}.csv", index=False)
+            print(f"Data saved to 'ebay_active_{search_term.replace(' ', '_')}.csv'")
+        else:
+            print("No data retrieved.")
+
+        time.sleep(2)  # Delay between runs
